@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+paddleocr
+paddlepaddle
+pdf2image
