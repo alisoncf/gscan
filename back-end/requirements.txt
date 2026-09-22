@@ -3,3 +3,6 @@ uvicorn
 paddleocr
 paddlepaddle
 pdf2image
+pytesseract
+PyMuPDF
+opencv-contrib-python

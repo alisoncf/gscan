@@ -20,8 +20,7 @@ def ocr_image(img: Image.Image):
     # Junta todo o texto em linhas
     lines = []
     for page in result:
-        for line in page:
-            lines.append(line[1][0])
+        lines.extend(page["rec_texts"])
     return lines
 
 def ocr_pdf(pdf_path, dpi=200):

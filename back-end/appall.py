@@ -4,6 +4,7 @@ from PIL import Image
 import os
 from pdf2image import convert_from_path
 from concurrent.futures import ThreadPoolExecutor
+import uuid
 
 app = FastAPI(title="GScan", description="API OCR otimizada para PDF e imagens")
 
@@ -21,11 +22,11 @@ def preprocess_image(img: Image.Image):
 
 def ocr_image(img: Image.Image):
     """Executa OCR em imagem PIL"""
-    temp_path = "temp_page.png"
+    temp_path = f"temp_page_{uuid.uuid4().hex}.png"
     img.save(temp_path)
     result = ocr.predict(temp_path)
     os.remove(temp_path)
-    text = " ".join([line[1][0] for page in result for line in page])
+    text = " ".join(t for page in result for t in page["rec_texts"])
     return text
 
 def ocr_pdf(pdf_path, dpi=200):
