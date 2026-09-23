@@ -1,10 +1,12 @@
 from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
 from paddleocr import PaddleOCR
 from PIL import Image
 import os
 from pdf2image import convert_from_path
 
 app = FastAPI(title="GScan Field Extraction")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 ocr = PaddleOCR(use_angle_cls=True, lang="pt")
 

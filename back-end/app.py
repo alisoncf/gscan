@@ -1,4 +1,5 @@
 from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import os
 import fitz  # PyMuPDF
@@ -8,6 +9,7 @@ import cv2
 import numpy as np
 
 app = FastAPI(title="GScan OCR Prático")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # Ajuste o caminho do Tesseract se necessário
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
