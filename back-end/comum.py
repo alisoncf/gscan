@@ -1,8 +1,8 @@
 """Recursos compartilhados entre os endpoints: caminhos externos, upload temporário e PaddleOCR"""
 import os
 import tempfile
-import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import UploadFile
 
@@ -28,16 +28,20 @@ def caminho_temporario(ext):
 
 
 # PaddleOCR é carregado uma vez só, na primeira vez que for usado, e compartilhado
-# entre os endpoints. Ele não aceita chamadas simultâneas: duas threads no predict()
-# derrubam o processo, por isso a trava.
+# entre os endpoints. Ele precisa ser criado e usado sempre na mesma thread: chamadas
+# simultâneas derrubam o processo, e chamadas de outra thread falham com
+# "RuntimeError: std::exception". Por isso todo o uso passa por uma thread dedicada.
 _ocr = None
-_ocr_lock = threading.Lock()
+_ocr_thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="paddleocr")
+
+
+def _predict(caminho_imagem):
+    global _ocr
+    if _ocr is None:
+        from paddleocr import PaddleOCR
+        _ocr = PaddleOCR(use_angle_cls=True, lang="pt")
+    return _ocr.predict(caminho_imagem)
 
 
 def paddle_predict(caminho_imagem):
-    global _ocr
-    with _ocr_lock:
-        if _ocr is None:
-            from paddleocr import PaddleOCR
-            _ocr = PaddleOCR(use_angle_cls=True, lang="pt")
-        return _ocr.predict(caminho_imagem)
+    return _ocr_thread.submit(_predict, caminho_imagem).result()
