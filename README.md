@@ -14,7 +14,7 @@ O back-end é composto por **quatro aplicações independentes**, cada uma em se
 
 ## Requisitos
 
-- Python 3.10+
+- Python **3.10 a 3.13** (recomendado: **3.13**, a versão testada). Python 3.14 ou mais novo não funciona: o `paddlepaddle` ainda não tem pacote para essas versões.
 - [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) instalado (usado por `app.py`). Caminho configurado em [app.py:13](back-end/app.py#L13) — ajuste se instalado em outro local. É preciso ter o pacote de idioma **por** (`tesseract --list-langs` deve listar `por`).
 - [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows) instalado (usado por `pdf2image` em todos os apps). Caminho configurado em cada arquivo, por exemplo [app.py:59](back-end/app.py#L59) — ajuste se instalado em outro local.
 
@@ -22,10 +22,15 @@ O back-end é composto por **quatro aplicações independentes**, cada uma em se
 
 ```bash
 cd back-end
-python -m venv venv
-venv\Scripts\activate        # Windows
+py -3.13 -m venv venv        # Windows: cria o venv com o Python 3.13
+venv\Scripts\activate
+python --version             # confira: deve mostrar Python 3.13.x
 pip install -r requirements.txt
 ```
+
+Se `py -3.13` der erro, o Python 3.13 não está instalado: baixe em [python.org](https://www.python.org/downloads/). No Linux/macOS, use `python3.13 -m venv venv` e `source venv/bin/activate`.
+
+Se já existir um `venv` criado com outra versão do Python, apague a pasta `venv` e crie de novo.
 
 ## Como rodar
 
