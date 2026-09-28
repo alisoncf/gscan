@@ -101,29 +101,43 @@ Campos não encontrados vêm como `null`.
 
 ### `POST /extract` — appall.py
 
-Recebe um PDF ou imagem, faz OCR (páginas de PDF são processadas em paralelo) e tenta estruturar automaticamente qualquer linha no formato `chave: valor` encontrada no texto — sem precisar informar os campos antecipadamente.
+Recebe um PDF ou imagem, faz OCR (páginas de PDF são processadas em paralelo) e estrutura o documento automaticamente, sem precisar informar os campos antecipadamente. Usa a posição de cada texto na página para:
+
+- **Pares chave:valor**: linhas `chave: valor`, e também rótulos sem `:` (como no RG: `NOME` com o valor logo abaixo). Cada rótulo é ligado ao texto mais próximo abaixo ou à direita dele. Rótulos sem `:` precisam estar na lista `ROTULOS` de [appall.py](back-end/appall.py); a comparação tolera erros de OCR e acentos.
+- **Tabelas**: uma linha com 3 ou mais títulos da lista `COLUNAS_TABELA` (ex.: `DISCIPLINA`, `ANO`, `MF`, `SF`) vira cabeçalho, e as linhas abaixo dela são lidas coluna por coluna até aparecer uma linha com texto numa coluna só ou um espaço vertical grande. Tabelas com as mesmas colunas em páginas seguidas são unidas.
+
+Textos que não se encaixam em nenhum dos dois viram `campo_N`. Chaves repetidas ganham sufixo (`nome_2`).
 
 **Parâmetros** (`multipart/form-data`):
 - `file`: arquivo PDF, JPG ou PNG
 
 **Exemplo:**
 ```bash
-curl -X POST "http://127.0.0.1:8002/extract" \
-  -F "file=@documento.pdf"
+curl -X POST "http://127.0.0.1:8002/extract"   -F "file=@historico.pdf"
 ```
 
 **Resposta:**
 ```json
 {
-  "documento": "documento.pdf",
+  "documento": "historico.pdf",
   "extraido": {
-    "nome": "Alison Filgueiras",
-    "campo_2": "Endereço não estruturado, por exemplo"
-  }
+    "matrícula": "20020352",
+    "nome": "FULANO DE TAL",
+    "curso": "GEOGRAFIA",
+    "campo_4": "UNIVERSIDADE ESTADUAL DE GOIÁS"
+  },
+  "tabelas": [
+    {
+      "colunas": ["disciplina", "ano", "mf", "che", "chc", "sf"],
+      "linhas": [
+        {"disciplina": "Estatística", "ano": "2002", "mf": "6,8", "che": "064", "chc": "064", "sf": "AP"}
+      ]
+    }
+  ]
 }
 ```
 
-> **Limitação conhecida:** como o OCR de cada página junta as linhas reconhecidas em uma única string (sem preservar quebras de linha), documentos com múltiplos campos na mesma página podem ter seus valores concatenados incorretamente pelo parser `chave: valor`. Funciona melhor com poucos campos por página ou documentos já bem espaçados.
+> **Limitações conhecidas:** o resultado depende de como o OCR separa as caixas de texto. Documentos tortos podem misturar linhas; células com texto quebrado em duas linhas encerram a tabela; colunas com títulos fora de `COLUNAS_TABELA` não são reconhecidas (acrescente-os à lista).
 
 ### `POST /split` — appsplit.py
 

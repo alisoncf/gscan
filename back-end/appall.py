@@ -4,16 +4,20 @@ from paddleocr import PaddleOCR
 from PIL import Image
 import os
 import re
+import bisect
 import difflib
 import unicodedata
 from pdf2image import convert_from_path
 from concurrent.futures import ThreadPoolExecutor
+import threading
 import uuid
 
 app = FastAPI(title="GScan", description="API OCR otimizada para PDF e imagens")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 ocr = PaddleOCR(use_angle_cls=True, lang="pt")
+# PaddleOCR não aceita chamadas simultâneas: duas threads no predict() derrubam o processo
+ocr_lock = threading.Lock()
 
 # Configurações de redimensionamento
 MAX_WIDTH = 1200
@@ -29,7 +33,8 @@ def ocr_image(img: Image.Image):
     """Executa OCR em imagem PIL e devolve [(texto, [x1, y1, x2, y2]), ...]"""
     temp_path = f"temp_page_{uuid.uuid4().hex}.png"
     img.save(temp_path)
-    result = ocr.predict(temp_path)
+    with ocr_lock:
+        result = ocr.predict(temp_path)
     os.remove(temp_path)
     items = []
     for page in result:
@@ -68,7 +73,19 @@ async def extract(file: UploadFile = File(...)):
 
     os.remove(temp_file)
 
-    return {"documento": file.filename, "extraido": parse_key_values(pages)}
+    # tabelas saem primeiro; o que sobra de cada página vai para o parser chave:valor
+    tabelas = []
+    restantes = []
+    for items in pages:
+        tabelas_pagina, sobra = extrair_tabelas(items)
+        tabelas.extend(tabelas_pagina)
+        restantes.append(sobra)
+
+    return {
+        "documento": file.filename,
+        "extraido": parse_key_values(restantes),
+        "tabelas": juntar_tabelas(tabelas),
+    }
 
 # ':' que separa chave e valor; ignora ':' entre dígitos (ex.: horário 14:30)
 SEPARADOR = re.compile(r"(?<!\d):|:(?!\d)")
@@ -84,9 +101,15 @@ ROTULOS = [
     "SEXO", "ENDERECO", "BAIRRO", "MUNICIPIO", "CEP", "TELEFONE", "EMAIL",
     "MATRICULA", "CURSO",
 ]
-_ROTULOS_COMPACTOS = {r.replace(" ", ""): r for r in ROTULOS}
-# rótulos curtos (RG, UF, CPF...) só valem com acerto exato, para não pegar lixo do OCR
-_ROTULOS_APROXIMAVEIS = [c for c in _ROTULOS_COMPACTOS if len(c) >= 4]
+
+# Títulos de coluna de tabelas (ex.: notas de histórico escolar). Sem acento, em maiúsculas.
+# Uma linha com 3 ou mais destes títulos é tratada como cabeçalho de tabela.
+COLUNAS_TABELA = [
+    "DISCIPLINA", "COMPONENTE CURRICULAR", "CODIGO", "TURMA", "PROFESSOR",
+    "ANO", "SEMESTRE", "PERIODO", "MF", "MEDIA", "MEDIA FINAL", "NOTA",
+    "FREQUENCIA", "FREQ", "FALTAS", "CH", "CHE", "CHC", "CARGA HORARIA",
+    "CREDITOS", "SF", "SITUACAO", "RESULTADO",
+]
 
 def normalizar(texto):
     """Maiúsculas, sem acento e sem pontuação"""
@@ -94,15 +117,104 @@ def normalizar(texto):
     t = re.sub(r"[^A-Za-z0-9 ]", " ", t).upper()
     return " ".join(t.split())
 
-def identificar_rotulo(texto):
-    """Devolve o rótulo conhecido que o texto representa (tolera erros do OCR) ou None"""
+def vocabulario(termos):
+    """Prepara uma lista de termos para busca com casar()"""
+    compactos = {t.replace(" ", ""): t for t in termos}
+    # termos curtos (RG, UF, MF...) só valem com acerto exato, para não pegar lixo do OCR
+    aproximaveis = [c for c in compactos if len(c) >= 4]
+    return compactos, aproximaveis
+
+def casar(texto, vocab):
+    """Devolve o termo do vocabulário que o texto representa (tolera erros do OCR) ou None"""
+    compactos, aproximaveis = vocab
     compacto = normalizar(texto).replace(" ", "")
-    if compacto in _ROTULOS_COMPACTOS:
-        return _ROTULOS_COMPACTOS[compacto]
+    if compacto in compactos:
+        return compactos[compacto]
     if len(compacto) < 4:
         return None
-    match = difflib.get_close_matches(compacto, _ROTULOS_APROXIMAVEIS, n=1, cutoff=0.8)
-    return _ROTULOS_COMPACTOS[match[0]] if match else None
+    match = difflib.get_close_matches(compacto, aproximaveis, n=1, cutoff=0.8)
+    return compactos[match[0]] if match else None
+
+_VOCAB_ROTULOS = vocabulario(ROTULOS)
+_VOCAB_COLUNAS = vocabulario(COLUNAS_TABELA)
+
+def identificar_rotulo(texto):
+    return casar(texto, _VOCAB_ROTULOS)
+
+def para_chave(termo):
+    """'DATA DE EXPEDICAO' -> 'data_de_expedicao'"""
+    return termo.lower().replace(" ", "_")
+
+def agrupar_linhas(items):
+    """Agrupa índices de caixas que estão na mesma altura da página, de cima para baixo"""
+    ordem = sorted(range(len(items)), key=lambda i: (items[i][1][1] + items[i][1][3]) / 2)
+    linhas = []
+    for i in ordem:
+        _, y1, _, y2 = items[i][1]
+        centro = (y1 + y2) / 2
+        if linhas:
+            ultima = linhas[-1]
+            centro_linha = sum((items[j][1][1] + items[j][1][3]) / 2 for j in ultima) / len(ultima)
+            altura = sum(items[j][1][3] - items[j][1][1] for j in ultima) / len(ultima)
+            if abs(centro - centro_linha) <= altura * 0.5:
+                ultima.append(i)
+                continue
+        linhas.append([i])
+    return linhas
+
+def extrair_tabelas(items):
+    """Encontra tabelas pelo cabeçalho e devolve (tabelas, caixas que não fazem parte delas)"""
+    items = [(t, b) for t, b in items if re.search(r"\w", t)]
+    linhas = agrupar_linhas(items)
+    usados = set()
+    tabelas = []
+    k = 0
+    while k < len(linhas):
+        # cabeçalho: linha com pelo menos 3 títulos de coluna conhecidos
+        cabecalho = [(i, casar(items[i][0], _VOCAB_COLUNAS)) for i in linhas[k]]
+        cabecalho = sorted([(i, c) for i, c in cabecalho if c], key=lambda p: items[p[0]][1][0])
+        k += 1
+        if len(cabecalho) < 3:
+            continue
+        usados.update(i for i, _ in cabecalho)
+        nomes = [para_chave(c) for _, c in cabecalho]
+        caixas = [items[i][1] for i, _ in cabecalho]
+        # fronteira entre colunas: meio do espaço entre um título e o seguinte
+        fronteiras = [(a[2] + b[0]) / 2 for a, b in zip(caixas, caixas[1:])]
+        altura = sum(b[3] - b[1] for b in caixas) / len(caixas)
+        fundo = max(b[3] for b in caixas)
+
+        registros = []
+        while k < len(linhas):
+            linha = sorted(linhas[k], key=lambda i: items[i][1][0])
+            topo = min(items[i][1][1] for i in linha)
+            if topo - fundo > altura * 3:
+                break  # espaço grande: a tabela acabou
+            celulas = {}
+            for i in linha:
+                x1, _, x2, _ = items[i][1]
+                coluna = nomes[bisect.bisect(fronteiras, (x1 + x2) / 2)]
+                celulas.setdefault(coluna, []).append(items[i][0])
+            if len(celulas) < 2:
+                break  # texto numa coluna só (ex.: "Continua..."): a tabela acabou
+            registros.append({n: " ".join(celulas.get(n, [])) for n in nomes})
+            usados.update(linha)
+            fundo = max(items[i][1][3] for i in linha)
+            k += 1
+        tabelas.append({"colunas": nomes, "linhas": registros})
+
+    restantes = [item for i, item in enumerate(items) if i not in usados]
+    return tabelas, restantes
+
+def juntar_tabelas(tabelas):
+    """Junta tabelas seguidas com as mesmas colunas (tabela que continua na página seguinte)"""
+    juntas = []
+    for t in tabelas:
+        if juntas and juntas[-1]["colunas"] == t["colunas"]:
+            juntas[-1]["linhas"].extend(t["linhas"])
+        else:
+            juntas.append(t)
+    return juntas
 
 def distancia_valor(rotulo, candidato):
     """Distância do rótulo até uma caixa logo abaixo ou logo à direita dele; None se não for vizinha"""
@@ -117,7 +229,7 @@ def distancia_valor(rotulo, candidato):
     # à direita: na mesma altura do rótulo
     if ry1 <= (cy1 + cy2) / 2 <= ry2 and cx1 >= rx2 - folga:
         d = cx1 - rx2
-        return max(d, 0) if d <= altura * 8 else None
+        return max(d, 0) if d <= altura * 15 else None
     return None
 
 def parse_key_values(pages):
@@ -150,7 +262,7 @@ def parse_key_values(pages):
                 continue
             rotulo = identificar_rotulo(texto)
             if rotulo:
-                rotulos[i] = rotulo.lower().replace(" ", "_")
+                rotulos[i] = para_chave(rotulo)
 
         # liga cada rótulo à caixa livre mais próxima, começando pelos pares mais próximos
         pares = []
