@@ -1,0 +1,13 @@
+services:
+  gscan:
+    build: ./back-end
+    
+    platform: linux/amd64
+    ports:
+      - "8000:8000"
+    volumes:
+      - paddle-modelos:/root/.paddlex
+    restart: unless-stopped
+
+volumes:
+  paddle-modelos:

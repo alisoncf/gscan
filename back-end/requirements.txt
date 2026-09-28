@@ -1,4 +1,6 @@
 # Testado com Python 3.13 (suportado: 3.10 a 3.13)
+# constraints.txt fixa também as dependências indiretas (numpy, protobuf...)
+-c constraints.txt
 fastapi==0.116.1
 uvicorn==0.35.0
 python-multipart==0.0.20

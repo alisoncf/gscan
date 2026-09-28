@@ -12,6 +12,23 @@ O back-end é um servidor único ([main.py](back-end/main.py)) com quatro endpoi
 | [appall.py](back-end/appall.py) | `POST /extract` | PaddleOCR | OCR completo + pares chave:valor e tabelas automáticos |
 | [appsplit.py](back-end/appsplit.py) | `POST /split` | PyMuPDF | Divide um PDF em páginas individuais (todas ou um subconjunto), devolvidas como .zip |
 
+## Rodando com Docker (recomendado)
+
+Só precisa do [Docker Desktop](https://www.docker.com/products/docker-desktop/) (no Windows, com WSL2). Python, Tesseract (com português), Poppler e todas as dependências já vão dentro da imagem, nas versões testadas.
+
+```bash
+docker compose up -d --build
+```
+
+A API fica em `http://127.0.0.1:8000` (Swagger em `/docs`), e o [painel de testes](#painel-de-testes) funciona igual.
+
+- O primeiro build demora alguns minutos e a imagem tem cerca de 2,4 GB, por causa do PaddlePaddle.
+- A primeira chamada a `/extract` ou `/extract_fields` baixa os modelos do PaddleOCR (cerca de 1 minuto). Eles ficam guardados no volume `paddle-modelos` e não são baixados de novo.
+- Para parar: `docker compose down`. Para ver os logs: `docker compose logs -f`.
+- Depois de mudar o código, rode `docker compose up -d --build` de novo.
+
+As seções abaixo (Requisitos, Instalação, Como rodar) são para rodar sem Docker.
+
 ## Requisitos
 
 - Python **3.10 a 3.13** (recomendado: **3.13**, a versão testada). Python 3.14 ou mais novo não funciona: o `paddlepaddle` ainda não tem pacote para essas versões.
@@ -33,6 +50,8 @@ pip install -r requirements.txt
 Se `py -3.13` der erro, o Python 3.13 não está instalado: baixe em [python.org](https://www.python.org/downloads/). No Linux/macOS, use `python3.13 -m venv venv` e `source venv/bin/activate`.
 
 Se já existir um `venv` criado com outra versão do Python, apague a pasta `venv` e crie de novo.
+
+O `requirements.txt` lista os pacotes do projeto, e o [constraints.txt](back-end/constraints.txt) fixa a versão exata de todas as dependências, inclusive as indiretas (numpy, protobuf...). O `pip install -r requirements.txt` já aplica os dois. Ao atualizar um pacote, gere o `constraints.txt` de novo com `pip freeze` a partir de um `venv` testado.
 
 ## Como rodar
 
