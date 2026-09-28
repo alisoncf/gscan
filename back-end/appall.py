@@ -1,6 +1,5 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import APIRouter, FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from paddleocr import PaddleOCR
 from PIL import Image
 import os
 import re
@@ -9,15 +8,10 @@ import difflib
 import unicodedata
 from pdf2image import convert_from_path
 from concurrent.futures import ThreadPoolExecutor
-import threading
-import uuid
 
-app = FastAPI(title="GScan", description="API OCR otimizada para PDF e imagens")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+from comum import POPPLER_PATH, caminho_temporario, paddle_predict, salvar_upload
 
-ocr = PaddleOCR(use_angle_cls=True, lang="pt")
-# PaddleOCR não aceita chamadas simultâneas: duas threads no predict() derrubam o processo
-ocr_lock = threading.Lock()
+router = APIRouter()
 
 # Configurações de redimensionamento
 MAX_WIDTH = 1200
@@ -31,11 +25,12 @@ def preprocess_image(img: Image.Image):
 
 def ocr_image(img: Image.Image):
     """Executa OCR em imagem PIL e devolve [(texto, [x1, y1, x2, y2]), ...]"""
-    temp_path = f"temp_page_{uuid.uuid4().hex}.png"
+    temp_path = caminho_temporario(".png")
     img.save(temp_path)
-    with ocr_lock:
-        result = ocr.predict(temp_path)
-    os.remove(temp_path)
+    try:
+        result = paddle_predict(temp_path)
+    finally:
+        os.remove(temp_path)
     items = []
     for page in result:
         for text, box in zip(page["rec_texts"], page["rec_boxes"]):
@@ -45,7 +40,7 @@ def ocr_image(img: Image.Image):
 def ocr_pdf(pdf_path, dpi=200):
     """Processa PDF multipágina em paralelo; devolve uma lista de itens por página"""
     #pages = convert_from_path(pdf_path, dpi=dpi)
-    pages = convert_from_path(pdf_path, poppler_path=r"C:\poppler\Library\bin")
+    pages = convert_from_path(pdf_path, poppler_path=POPPLER_PATH)
 
     def process_page(page):
         preprocessed = preprocess_image(page)
@@ -54,24 +49,21 @@ def ocr_pdf(pdf_path, dpi=200):
     with ThreadPoolExecutor(max_workers=4) as executor:
         return list(executor.map(process_page, pages))
 
-@app.post("/extract")
+@router.post("/extract")
 async def extract(file: UploadFile = File(...)):
-    # Salva temporariamente
-    temp_file = f"temp_{file.filename}"
-    with open(temp_file, "wb") as f:
-        f.write(await file.read())
-
     ext = os.path.splitext(file.filename)[1].lower()
-    if ext in [".jpg", ".jpeg", ".png"]:
-        img = Image.open(temp_file)
-        pages = [ocr_image(preprocess_image(img))]
-    elif ext == ".pdf":
-        pages = ocr_pdf(temp_file, dpi=200)
-    else:
-        os.remove(temp_file)
+    if ext not in [".jpg", ".jpeg", ".png", ".pdf"]:
         return {"error": "Formato não suportado. Use PDF ou imagem."}
 
-    os.remove(temp_file)
+    temp_file = await salvar_upload(file)
+    try:
+        if ext == ".pdf":
+            pages = ocr_pdf(temp_file, dpi=200)
+        else:
+            with Image.open(temp_file) as img:
+                pages = [ocr_image(preprocess_image(img))]
+    finally:
+        os.remove(temp_file)
 
     # tabelas saem primeiro; o que sobra de cada página vai para o parser chave:valor
     tabelas = []
@@ -86,6 +78,11 @@ async def extract(file: UploadFile = File(...)):
         "extraido": parse_key_values(restantes),
         "tabelas": juntar_tabelas(tabelas),
     }
+
+# App próprio, para rodar só este endpoint: uvicorn appall:app --port 8002
+app = FastAPI(title="GScan", description="API OCR otimizada para PDF e imagens")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(router)
 
 # ':' que separa chave e valor; ignora ':' entre dígitos (ex.: horário 14:30)
 SEPARADOR = re.compile(r"(?<!\d):|:(?!\d)")

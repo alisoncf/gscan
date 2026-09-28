@@ -19,7 +19,10 @@
 <body>
 
 <h1>GScan - Painel de Testes</h1>
-<p class="hint">Ferramenta local para chamar os endpoints diretamente, sem precisar do front-end. Cada API deve estar rodando na sua porta (veja o README).</p>
+<p class="hint">Ferramenta local para chamar os endpoints diretamente, sem precisar do front-end. Suba o servidor com <code>uvicorn main:app --port 8000</code> (veja o README).</p>
+
+<label for="servidor">Servidor</label>
+<input type="text" id="servidor" value="http://127.0.0.1:8000">
 
 <label for="endpoint">Endpoint</label>
 <select id="endpoint"></select>
@@ -38,22 +41,22 @@
 const ENDPOINTS = {
   transcribe: {
     label: "POST /transcribe (app.py - texto completo via Tesseract)",
-    url: "http://127.0.0.1:8000/transcribe",
+    caminho: "/transcribe",
     campos: []
   },
   extract_fields: {
     label: "POST /extract_fields (appfield.py - campos específicos via PaddleOCR)",
-    url: "http://127.0.0.1:8001/extract_fields",
+    caminho: "/extract_fields",
     campos: [{ nome: "fields", rotulo: "Campos (separados por vírgula)", placeholder: "Nome,CPF" }]
   },
   extract: {
-    label: "POST /extract (appall.py - chave:valor automático via PaddleOCR)",
-    url: "http://127.0.0.1:8002/extract",
+    label: "POST /extract (appall.py - chave:valor e tabelas via PaddleOCR)",
+    caminho: "/extract",
     campos: []
   },
   split: {
     label: "POST /split (appsplit.py - divide PDF em páginas)",
-    url: "http://127.0.0.1:8003/split",
+    caminho: "/split",
     campos: [{ nome: "paginas", rotulo: "Páginas (opcional, ex.: 1,3,5-7)", placeholder: "vazio = todas" }]
   }
 };
@@ -90,6 +93,7 @@ renderCamposExtra();
 
 document.getElementById("enviar").addEventListener("click", async () => {
   const cfg = ENDPOINTS[selectEndpoint.value];
+  const url = document.getElementById("servidor").value.trim().replace(/\/+$/, "") + cfg.caminho;
   const arquivoInput = document.getElementById("arquivo");
 
   if (!arquivoInput.files.length) {
@@ -108,7 +112,7 @@ document.getElementById("enviar").addEventListener("click", async () => {
   resultadoDiv.textContent = "";
 
   try {
-    const resposta = await fetch(cfg.url, { method: "POST", body: formData });
+    const resposta = await fetch(url, { method: "POST", body: formData });
     const contentType = resposta.headers.get("content-type") || "";
 
     if (contentType.includes("application/json")) {
@@ -124,18 +128,18 @@ document.getElementById("enviar").addEventListener("click", async () => {
       const match = disposicao.match(/filename="?([^"]+)"?/);
       const nomeArquivo = match ? match[1] : "download";
 
-      const url = URL.createObjectURL(blob);
+      const urlBlob = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
+      a.href = urlBlob;
       a.download = nomeArquivo;
       a.click();
-      URL.revokeObjectURL(url);
+      URL.revokeObjectURL(urlBlob);
 
       statusDiv.innerHTML = `<span class="ok">Arquivo baixado: ${nomeArquivo}</span>`;
       resultadoDiv.textContent = `(resposta binária, ${blob.size} bytes)`;
     }
   } catch (erro) {
-    statusDiv.innerHTML = `<span class="erro">Falha ao chamar ${cfg.url} — a API está rodando nessa porta?</span>`;
+    statusDiv.innerHTML = `<span class="erro">Falha ao chamar ${url} — o servidor está rodando? Se ele caiu, veja o erro no terminal do uvicorn.</span>`;
     resultadoDiv.textContent = String(erro);
   }
 });

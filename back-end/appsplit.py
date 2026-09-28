@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import APIRouter, FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import os
@@ -6,8 +6,9 @@ import io
 import zipfile
 import fitz  # PyMuPDF
 
-app = FastAPI(title="GScan - Split PDF")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+from comum import salvar_upload
+
+router = APIRouter()
 
 def parse_intervalo_paginas(paginas: str, total_paginas: int):
     """Converte '1,3,5-7' (1-based) em índices de página 0-based, validados contra o total"""
@@ -31,50 +32,39 @@ def parse_intervalo_paginas(paginas: str, total_paginas: int):
 
     return sorted(indices)
 
-@app.post("/split")
+@router.post("/split")
 async def split_pdf(file: UploadFile = File(...), paginas: str = Form(default="")):
-    temp_file = f"temp_{file.filename}"
-    with open(temp_file, "wb") as f:
-        f.write(await file.read())
-
     ext = os.path.splitext(file.filename)[1].lower()
+    if ext != ".pdf":
+        return {"error": "Formato não suportado. Use PDF."}
 
+    temp_file = await salvar_upload(file)
     try:
-        if ext != ".pdf":
-            os.remove(temp_file)
-            return {"error": "Formato não suportado. Use PDF."}
+        with fitz.open(temp_file) as documento:
+            indices = parse_intervalo_paginas(paginas, documento.page_count)
+            if not indices:
+                return {"error": "Nenhuma página válida foi selecionada."}
 
-        documento = fitz.open(temp_file)
-        total_paginas = documento.page_count
-        indices = parse_intervalo_paginas(paginas, total_paginas)
+            nome_base = os.path.splitext(file.filename)[0]
 
-        if not indices:
-            documento.close()
-            os.remove(temp_file)
-            return {"error": "Nenhuma página válida foi selecionada."}
+            buffer_zip = io.BytesIO()
+            with zipfile.ZipFile(buffer_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                for indice in indices:
+                    pagina_doc = fitz.open()
+                    pagina_doc.insert_pdf(documento, from_page=indice, to_page=indice)
 
-        nome_base = os.path.splitext(file.filename)[0]
+                    buffer_pagina = io.BytesIO()
+                    pagina_doc.save(buffer_pagina)
+                    pagina_doc.close()
 
-        buffer_zip = io.BytesIO()
-        with zipfile.ZipFile(buffer_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-            for indice in indices:
-                pagina_doc = fitz.open()
-                pagina_doc.insert_pdf(documento, from_page=indice, to_page=indice)
-
-                buffer_pagina = io.BytesIO()
-                pagina_doc.save(buffer_pagina)
-                pagina_doc.close()
-
-                numero_pagina = indice + 1
-                nome_arquivo = f"{nome_base}_pagina_{numero_pagina}.pdf"
-                zf.writestr(nome_arquivo, buffer_pagina.getvalue())
-
-        documento.close()
+                    numero_pagina = indice + 1
+                    nome_arquivo = f"{nome_base}_pagina_{numero_pagina}.pdf"
+                    zf.writestr(nome_arquivo, buffer_pagina.getvalue())
     except Exception as e:
-        os.remove(temp_file)
         return {"error": f"Ocorreu um erro ao dividir o PDF: {str(e)}"}
+    finally:
+        os.remove(temp_file)
 
-    os.remove(temp_file)
     buffer_zip.seek(0)
 
     return StreamingResponse(
@@ -82,3 +72,8 @@ async def split_pdf(file: UploadFile = File(...), paginas: str = Form(default=""
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{nome_base}_paginas.zip"'},
     )
+
+# App próprio, para rodar só este endpoint: uvicorn appsplit:app --port 8003
+app = FastAPI(title="GScan - Split PDF")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(router)

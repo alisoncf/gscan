@@ -3,20 +3,22 @@ Generic Scan
 
 O GScan é um conjunto de APIs leves (FastAPI) que recebem documentos digitalizados (PDF, JPG, PNG) e retornam texto ou pares chave:valor em JSON, usando OCR (Tesseract ou PaddleOCR).
 
-O back-end é composto por **quatro aplicações independentes**, cada uma em seu próprio arquivo, com um único endpoint. Elas não rodam juntas na mesma porta — suba cada uma separadamente (ou em portas diferentes) conforme a necessidade.
+O back-end é um servidor único ([main.py](back-end/main.py)) com quatro endpoints. Cada endpoint fica no seu próprio arquivo; o que é compartilhado (PaddleOCR, caminhos externos, arquivos temporários) fica em [comum.py](back-end/comum.py).
 
 | Arquivo | Endpoint | Motor | Função |
 |---|---|---|---|
 | [app.py](back-end/app.py) | `POST /transcribe` | Tesseract | Transcreve o texto completo de PDF (digital ou escaneado) ou imagem |
 | [appfield.py](back-end/appfield.py) | `POST /extract_fields` | PaddleOCR | Extrai valores de campos específicos informados na requisição |
-| [appall.py](back-end/appall.py) | `POST /extract` | PaddleOCR (paralelo) | OCR completo + parser automático de linhas `chave: valor` |
+| [appall.py](back-end/appall.py) | `POST /extract` | PaddleOCR | OCR completo + pares chave:valor e tabelas automáticos |
 | [appsplit.py](back-end/appsplit.py) | `POST /split` | PyMuPDF | Divide um PDF em páginas individuais (todas ou um subconjunto), devolvidas como .zip |
 
 ## Requisitos
 
 - Python **3.10 a 3.13** (recomendado: **3.13**, a versão testada). Python 3.14 ou mais novo não funciona: o `paddlepaddle` ainda não tem pacote para essas versões.
-- [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) instalado (usado por `app.py`). Caminho configurado em [app.py:13](back-end/app.py#L13) — ajuste se instalado em outro local. É preciso ter o pacote de idioma **por** (`tesseract --list-langs` deve listar `por`).
-- [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows) instalado (usado por `pdf2image` em todos os apps). Caminho configurado em cada arquivo, por exemplo [app.py:59](back-end/app.py#L59) — ajuste se instalado em outro local.
+- [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) instalado (usado pelo `/transcribe`), com o pacote de idioma **por** (`tesseract --list-langs` deve listar `por`).
+- [Poppler for Windows](https://github.com/oschwartz10612/poppler-windows) instalado (usado para converter PDF em imagem).
+
+No Windows, o padrão é `C:\Program Files\Tesseract-OCR\tesseract.exe` e `C:\poppler\Library\bin`. Se instalou em outro lugar, informe pelas variáveis de ambiente `TESSERACT_CMD` e `POPPLER_PATH` antes de subir o servidor (ex.: `set POPPLER_PATH=D:\poppler\Library\bin`). No Linux/macOS, os dois são encontrados pelo PATH e não precisam de configuração.
 
 ## Instalação
 
@@ -34,20 +36,18 @@ Se já existir um `venv` criado com outra versão do Python, apague a pasta `ven
 
 ## Como rodar
 
-Cada app sobe em sua própria porta:
-
 ```bash
-uvicorn app:app --port 8000        # /transcribe
-uvicorn appfield:app --port 8001   # /extract_fields
-uvicorn appall:app --port 8002     # /extract
-uvicorn appsplit:app --port 8003   # /split
+cd back-end
+uvicorn main:app --port 8000
 ```
 
-Cada um expõe documentação interativa (Swagger) em `http://127.0.0.1:<porta>/docs`.
+Todos os endpoints ficam em `http://127.0.0.1:8000`, com documentação interativa (Swagger) em `http://127.0.0.1:8000/docs`. O PaddleOCR é carregado na primeira chamada a `/extract` ou `/extract_fields`, então essa primeira chamada demora alguns segundos a mais.
+
+Cada arquivo também pode subir sozinho, se precisar de só um endpoint (ex.: `uvicorn appall:app --port 8002`).
 
 ## Painel de testes
 
-Com os quatro servidores no ar, abra [back-end/painel.html](back-end/painel.html) direto no navegador (duplo clique no arquivo) para testar qualquer endpoint sem precisar do front-end nem de curl — escolha o endpoint, selecione o arquivo, preencha os campos opcionais e envie. É só um HTML estático com JavaScript puro, sem servidor próprio; as APIs precisam ter CORS habilitado (já vem configurado em todos os apps) para o navegador aceitar as chamadas.
+Com o servidor no ar, abra [back-end/painel.html](back-end/painel.html) direto no navegador (duplo clique no arquivo) para testar qualquer endpoint sem precisar do front-end nem de curl: confira o endereço do servidor, escolha o endpoint, selecione o arquivo, preencha os campos opcionais e envie. É só um HTML estático com JavaScript puro, sem servidor próprio; a API tem CORS habilitado para o navegador aceitar as chamadas.
 
 ## Endpoints
 
@@ -82,7 +82,7 @@ Recebe um PDF ou imagem e uma lista de campos desejados; procura cada campo no t
 
 **Exemplo:**
 ```bash
-curl -X POST "http://127.0.0.1:8001/extract_fields" \
+curl -X POST "http://127.0.0.1:8000/extract_fields" \
   -F "file=@documento.png" \
   -F "fields=Nome,CPF"
 ```
@@ -113,7 +113,7 @@ Textos que não se encaixam em nenhum dos dois viram `campo_N`. Chaves repetidas
 
 **Exemplo:**
 ```bash
-curl -X POST "http://127.0.0.1:8002/extract"   -F "file=@historico.pdf"
+curl -X POST "http://127.0.0.1:8000/extract"   -F "file=@historico.pdf"
 ```
 
 **Resposta:**
@@ -149,7 +149,7 @@ Recebe um PDF e devolve um `.zip` com uma página por arquivo PDF. Não depende 
 
 **Exemplo — páginas específicas:**
 ```bash
-curl -X POST "http://127.0.0.1:8003/split" \
+curl -X POST "http://127.0.0.1:8000/split" \
   -F "file=@documento.pdf" \
   -F "paginas=1,3" \
   -o paginas.zip
@@ -157,7 +157,7 @@ curl -X POST "http://127.0.0.1:8003/split" \
 
 **Exemplo — PDF inteiro:**
 ```bash
-curl -X POST "http://127.0.0.1:8003/split" \
+curl -X POST "http://127.0.0.1:8000/split" \
   -F "file=@documento.pdf" \
   -o paginas.zip
 ```

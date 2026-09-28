@@ -1,24 +1,24 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import APIRouter, FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from paddleocr import PaddleOCR
 from PIL import Image
 import os
 from pdf2image import convert_from_path
 
-app = FastAPI(title="GScan Field Extraction")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+from comum import POPPLER_PATH, caminho_temporario, paddle_predict, salvar_upload
 
-ocr = PaddleOCR(use_angle_cls=True, lang="pt")
+router = APIRouter()
 
 def preprocess_image(img: Image.Image, max_size=(1200, 1200)):
     img.thumbnail(max_size)
     return img.convert("L")  # grayscale
 
 def ocr_image(img: Image.Image):
-    temp_path = "temp.png"
+    temp_path = caminho_temporario(".png")
     img.save(temp_path)
-    result = ocr.predict(temp_path)
-    os.remove(temp_path)
+    try:
+        result = paddle_predict(temp_path)
+    finally:
+        os.remove(temp_path)
     # Junta todo o texto em linhas
     lines = []
     for page in result:
@@ -27,7 +27,7 @@ def ocr_image(img: Image.Image):
 
 def ocr_pdf(pdf_path, dpi=200):
     #pages = convert_from_path(pdf_path, dpi=dpi)
-    pages = convert_from_path(pdf_path, dpi=dpi, poppler_path=r"C:\poppler\Library\bin")
+    pages = convert_from_path(pdf_path, dpi=dpi, poppler_path=POPPLER_PATH)
     all_lines = []
     for page in pages:
         pre = preprocess_image(page)
@@ -54,30 +54,33 @@ def extract_fields(lines, fields):
             data[field] = None
     return data
 
-@app.post("/extract_fields")
+@router.post("/extract_fields")
 async def extract_fields_endpoint(
     file: UploadFile = File(...),
     fields: str = Form(...)
 ):
-    temp_file = f"temp_{file.filename}"
-    with open(temp_file, "wb") as f:
-        f.write(await file.read())
-
     # Recebe lista de campos como string separada por vírgula
     fields_list = [f.strip() for f in fields.split(',')]
 
     ext = os.path.splitext(file.filename)[1].lower()
-    if ext in [".jpg", ".jpeg", ".png"]:
-        img = Image.open(temp_file)
-        lines = ocr_image(preprocess_image(img))
-    elif ext == ".pdf":
-        lines = ocr_pdf(temp_file)
-    else:
-        os.remove(temp_file)
+    if ext not in [".jpg", ".jpeg", ".png", ".pdf"]:
         return {"error": "Formato não suportado. Use PDF ou imagem."}
 
-    os.remove(temp_file)
+    temp_file = await salvar_upload(file)
+    try:
+        if ext == ".pdf":
+            lines = ocr_pdf(temp_file)
+        else:
+            with Image.open(temp_file) as img:
+                lines = ocr_image(preprocess_image(img))
+    finally:
+        os.remove(temp_file)
 
     data = extract_fields(lines, fields_list)
 
     return {"documento": file.filename, "extraido": data}
+
+# App próprio, para rodar só este endpoint: uvicorn appfield:app --port 8001
+app = FastAPI(title="GScan Field Extraction")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(router)

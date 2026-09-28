@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import APIRouter, FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 import os
@@ -8,11 +8,13 @@ from pdf2image import convert_from_path
 import cv2
 import numpy as np
 
-app = FastAPI(title="GScan OCR Prático")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+from comum import POPPLER_PATH, TESSERACT_CMD, salvar_upload
 
-# Ajuste o caminho do Tesseract se necessário
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+router = APIRouter()
+
+# Caminho do Tesseract: variável de ambiente TESSERACT_CMD (veja comum.py)
+if TESSERACT_CMD:
+    pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
 
 def extract_text_pdf_digital(pdf_path):
     """Extrai texto de PDFs digitais (não escaneados)"""
@@ -58,37 +60,37 @@ def ocr_image(img: Image.Image):
 def ocr_pdf_scanned(pdf_path, dpi=200):
     """OCR de PDFs escaneados ou imagens em PDF"""
     #pages = convert_from_path(pdf_path, dpi=dpi)
-    pages = convert_from_path(pdf_path, dpi=dpi, poppler_path=r"C:\poppler\Library\bin")
+    pages = convert_from_path(pdf_path, dpi=dpi, poppler_path=POPPLER_PATH)
     texts = []
     for page in pages:
         texts.append(ocr_image(page))
     return "\n".join(texts)
 
-@app.post("/transcribe")
+@router.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
-    temp_file = f"temp_{file.filename}"
-    with open(temp_file, "wb") as f:
-        f.write(await file.read())
-
     ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".pdf"]:
+        return {"error": "Formato não suportado. Use PDF ou imagem."}
 
+    temp_file = await salvar_upload(file)
     try:
-        if ext in [".jpg", ".jpeg", ".png"]:
-            img = Image.open(temp_file)
-            text = ocr_image(img)
-        elif ext == ".pdf":
+        if ext == ".pdf":
             # Tenta extrair PDF digital primeiro
             text = extract_text_pdf_digital(temp_file)
             if not text.strip():
                 # PDF escaneado → OCR
                 text = ocr_pdf_scanned(temp_file, dpi=200)
         else:
-            os.remove(temp_file)
-            return {"error": "Formato não suportado. Use PDF ou imagem."}
+            with Image.open(temp_file) as img:
+                text = ocr_image(img)
     except Exception as e:
-        os.remove(temp_file)
         return {"error": f"Ocorreu um erro no OCR: {str(e)}"}
-
-    os.remove(temp_file)
+    finally:
+        os.remove(temp_file)
 
     return {"documento": file.filename, "texto": text}
+
+# App próprio, para rodar só este endpoint: uvicorn app:app --port 8000
+app = FastAPI(title="GScan OCR Prático")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(router)
