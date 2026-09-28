@@ -1,58 +1,33 @@
 from fastapi import APIRouter, FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
 import os
-from pdf2image import convert_from_path
+import re
+import difflib
 
-from comum import POPPLER_PATH, caminho_temporario, paddle_predict, salvar_upload
+from appall import (FORMATOS_ACEITOS, ROTULOS, ler_documento, normalizar,
+                    parse_key_values, separar_tabelas, vocabulario)
 
 router = APIRouter()
 
-def preprocess_image(img: Image.Image, max_size=(1200, 1200)):
-    img.thumbnail(max_size)
-    return img.convert("L")  # grayscale
+def compactar(texto):
+    """'Data de Nascimento' / 'data_de_nascimento_2' -> 'DATADENASCIMENTO'"""
+    return normalizar(re.sub(r"_\d+$", "", texto)).replace(" ", "")
 
-def ocr_image(img: Image.Image):
-    temp_path = caminho_temporario(".png")
-    img.save(temp_path)
-    try:
-        result = paddle_predict(temp_path)
-    finally:
-        os.remove(temp_path)
-    # Junta todo o texto em linhas
-    lines = []
-    for page in result:
-        lines.extend(page["rec_texts"])
-    return lines
-
-def ocr_pdf(pdf_path, dpi=200):
-    #pages = convert_from_path(pdf_path, dpi=dpi)
-    pages = convert_from_path(pdf_path, dpi=dpi, poppler_path=POPPLER_PATH)
-    all_lines = []
-    for page in pages:
-        pre = preprocess_image(page)
-        all_lines.extend(ocr_image(pre))
-    return all_lines
-
-def extract_fields(lines, fields):
-    """Procura os campos no texto e devolve valor após ':' ou próximo"""
-    data = {}
+def extract_fields(data, fields):
+    """Procura cada campo pedido entre as chaves extraídas; None se não achar"""
+    # campo_N são textos soltos, sem rótulo
+    chaves = [c for c in data if not re.fullmatch(r"campo_\d+", c)]
+    compactas = [compactar(c) for c in chaves]
+    resultado = {}
     for field in fields:
-        found = False
-        for line in lines:
-            if field.lower() in line.lower():
-                # tenta pegar valor após ':'
-                if ':' in line:
-                    _, valor = line.split(':', 1)
-                    data[field] = valor.strip()
-                else:
-                    # se não tiver ':', pega texto inteiro da linha
-                    data[field] = line.strip()
-                found = True
-                break
-        if not found:
-            data[field] = None
-    return data
+        alvo = compactar(field)
+        # primeira ocorrência no documento; se não houver igual, a mais parecida (erros de OCR)
+        if alvo in compactas:
+            resultado[field] = data[chaves[compactas.index(alvo)]]
+            continue
+        match = difflib.get_close_matches(alvo, compactas, n=1, cutoff=0.85)
+        resultado[field] = data[chaves[compactas.index(match[0])]] if match else None
+    return resultado
 
 @router.post("/extract_fields")
 async def extract_fields_endpoint(
@@ -60,25 +35,19 @@ async def extract_fields_endpoint(
     fields: str = Form(...)
 ):
     # Recebe lista de campos como string separada por vírgula
-    fields_list = [f.strip() for f in fields.split(',')]
+    fields_list = [f.strip() for f in fields.split(',') if f.strip()]
 
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in [".jpg", ".jpeg", ".png", ".pdf"]:
+    if os.path.splitext(file.filename)[1].lower() not in FORMATOS_ACEITOS:
         return {"error": "Formato não suportado. Use PDF ou imagem."}
 
-    temp_file = await salvar_upload(file)
-    try:
-        if ext == ".pdf":
-            lines = ocr_pdf(temp_file)
-        else:
-            with Image.open(temp_file) as img:
-                lines = ocr_image(preprocess_image(img))
-    finally:
-        os.remove(temp_file)
+    pages = await ler_documento(file)
+    _, restantes = separar_tabelas(pages)
+    # os campos pedidos viram rótulos conhecidos: são achados mesmo sem ':',
+    # com o valor ao lado ou embaixo
+    vocab = vocabulario(ROTULOS + [normalizar(f) for f in fields_list])
+    data = parse_key_values(restantes, vocab)
 
-    data = extract_fields(lines, fields_list)
-
-    return {"documento": file.filename, "extraido": data}
+    return {"documento": file.filename, "extraido": extract_fields(data, fields_list)}
 
 # App próprio, para rodar só este endpoint: uvicorn appfield:app --port 8001
 app = FastAPI(title="GScan Field Extraction")

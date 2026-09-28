@@ -93,7 +93,7 @@ curl -X POST "http://127.0.0.1:8000/transcribe" \
 
 ### `POST /extract_fields` — appfield.py
 
-Recebe um PDF ou imagem e uma lista de campos desejados; procura cada campo no texto reconhecido e devolve o valor encontrado (texto após `:` na mesma linha, quando existir).
+Recebe um PDF ou imagem e uma lista de campos desejados, e devolve o valor de cada um. Usa o mesmo parser por posição do `/extract`, com os campos pedidos adicionados aos rótulos conhecidos. Assim um campo é encontrado com ou sem `:`, com o valor ao lado (`Nome: Fulano`) ou embaixo (como no RG), mesmo que não esteja na lista `ROTULOS`. A comparação ignora maiúsculas e acentos e tolera pequenos erros de OCR. Se o campo aparecer mais de uma vez, vale a primeira ocorrência.
 
 **Parâmetros** (`multipart/form-data`):
 - `file`: arquivo PDF, JPG ou PNG
@@ -122,7 +122,7 @@ Campos não encontrados vêm como `null`.
 
 Recebe um PDF ou imagem, faz OCR (páginas de PDF são processadas em paralelo) e estrutura o documento automaticamente, sem precisar informar os campos antecipadamente. Usa a posição de cada texto na página para:
 
-- **Pares chave:valor**: linhas `chave: valor`, e também rótulos sem `:` (como no RG: `NOME` com o valor logo abaixo). Cada rótulo é ligado ao texto mais próximo abaixo ou à direita dele. Rótulos sem `:` precisam estar na lista `ROTULOS` de [appall.py](back-end/appall.py); a comparação tolera erros de OCR e acentos.
+- **Pares chave:valor**: linhas `chave: valor`, e também rótulos sem `:` (como no RG: `NOME` com o valor logo abaixo). Cada rótulo é ligado ao texto mais próximo abaixo ou à direita dele; rótulos escritos com `:` preferem o valor à direita e só usam o de baixo quando não há nada ao lado. Rótulos sem `:` precisam estar na lista `ROTULOS` de [appall.py](back-end/appall.py); a comparação tolera erros de OCR e acentos.
 - **Tabelas**: uma linha com 3 ou mais títulos da lista `COLUNAS_TABELA` (ex.: `DISCIPLINA`, `ANO`, `MF`, `SF`) vira cabeçalho, e as linhas abaixo dela são lidas coluna por coluna até aparecer uma linha com texto numa coluna só ou um espaço vertical grande. Tabelas com as mesmas colunas em páginas seguidas são unidas.
 
 Textos que não se encaixam em nenhum dos dois viram `campo_N`. Chaves repetidas ganham sufixo (`nome_2`).

@@ -49,34 +49,43 @@ def ocr_pdf(pdf_path, dpi=200):
     with ThreadPoolExecutor(max_workers=4) as executor:
         return list(executor.map(process_page, pages))
 
-@router.post("/extract")
-async def extract(file: UploadFile = File(...)):
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in [".jpg", ".jpeg", ".png", ".pdf"]:
-        return {"error": "Formato não suportado. Use PDF ou imagem."}
+FORMATOS_ACEITOS = [".jpg", ".jpeg", ".png", ".pdf"]
 
+async def ler_documento(file: UploadFile):
+    """OCR do upload (PDF ou imagem); devolve as caixas de cada página"""
+    ext = os.path.splitext(file.filename)[1].lower()
     temp_file = await salvar_upload(file)
     try:
         if ext == ".pdf":
-            pages = ocr_pdf(temp_file, dpi=200)
-        else:
-            with Image.open(temp_file) as img:
-                pages = [ocr_image(preprocess_image(img))]
+            return ocr_pdf(temp_file, dpi=200)
+        with Image.open(temp_file) as img:
+            return [ocr_image(preprocess_image(img))]
     finally:
         os.remove(temp_file)
 
-    # tabelas saem primeiro; o que sobra de cada página vai para o parser chave:valor
+def separar_tabelas(pages):
+    """Tira as tabelas de cada página; devolve (tabelas, caixas que sobraram por página)"""
     tabelas = []
     restantes = []
     for items in pages:
         tabelas_pagina, sobra = extrair_tabelas(items)
         tabelas.extend(tabelas_pagina)
         restantes.append(sobra)
+    return juntar_tabelas(tabelas), restantes
+
+@router.post("/extract")
+async def extract(file: UploadFile = File(...)):
+    if os.path.splitext(file.filename)[1].lower() not in FORMATOS_ACEITOS:
+        return {"error": "Formato não suportado. Use PDF ou imagem."}
+
+    pages = await ler_documento(file)
+    # tabelas saem primeiro; o que sobra de cada página vai para o parser chave:valor
+    tabelas, restantes = separar_tabelas(pages)
 
     return {
         "documento": file.filename,
         "extraido": parse_key_values(restantes),
-        "tabelas": juntar_tabelas(tabelas),
+        "tabelas": tabelas,
     }
 
 # App próprio, para rodar só este endpoint: uvicorn appall:app --port 8002
@@ -135,9 +144,6 @@ def casar(texto, vocab):
 
 _VOCAB_ROTULOS = vocabulario(ROTULOS)
 _VOCAB_COLUNAS = vocabulario(COLUNAS_TABELA)
-
-def identificar_rotulo(texto):
-    return casar(texto, _VOCAB_ROTULOS)
 
 def para_chave(termo):
     """'DATA DE EXPEDICAO' -> 'data_de_expedicao'"""
@@ -214,7 +220,7 @@ def juntar_tabelas(tabelas):
             juntas.append(t)
     return juntas
 
-def dividir_rotulos_grudados(texto):
+def dividir_rotulos_grudados(texto, vocab=_VOCAB_ROTULOS):
     """Posições onde começam rótulos grudados no meio de uma caixa do OCR.
     Ex.: "20020352 Nome:" -> [9]; "Local: Água Grande - São Nacionalidade:" -> [25]"""
     cortes = []
@@ -225,13 +231,13 @@ def dividir_rotulos_grudados(texto):
         # 1º: rótulo conhecido exato, do mais longo ao mais curto ("Data de nascimento" antes de "nascimento")
         for n in range(min(4, len(palavras)), 0, -1):
             candidato = texto[palavras[-n].start():m.start()]
-            if normalizar(candidato).replace(" ", "") in _VOCAB_ROTULOS[0]:
+            if normalizar(candidato).replace(" ", "") in vocab[0]:
                 inicio = palavras[-n].start()
                 break
         # 2º: rótulo aproximado, do mais curto ao mais longo ("Nacionalidade" antes de "São Nacionalidade")
         if inicio is None:
             for n in range(1, min(4, len(palavras)) + 1):
-                if identificar_rotulo(texto[palavras[-n].start():m.start()]):
+                if casar(texto[palavras[-n].start():m.start()], vocab):
                     inicio = palavras[-n].start()
                     break
         # 3º: rótulo desconhecido, mas o que vem antes tem número, então é valor ("20020352 Fax:")
@@ -242,11 +248,11 @@ def dividir_rotulos_grudados(texto):
             cortes.append(inicio)
     return cortes
 
-def dividir_caixas(items):
+def dividir_caixas(items, vocab=_VOCAB_ROTULOS):
     """Separa caixas com rótulos grudados, estimando a posição de cada pedaço pelo nº de caracteres"""
     resultado = []
     for texto, (x1, y1, x2, y2) in items:
-        limites = [0] + dividir_rotulos_grudados(texto) + [len(texto)]
+        limites = [0] + dividir_rotulos_grudados(texto, vocab) + [len(texto)]
         largura_char = (x2 - x1) / max(len(texto), 1)
         for a, b in zip(limites, limites[1:]):
             pedaco = texto[a:b].strip()
@@ -273,8 +279,9 @@ def distancia_valor(rotulo, candidato, prefere_direita=False):
         return max(d, 0) if d <= altura * 15 else None
     return None
 
-def parse_key_values(pages):
-    """Monta o dicionário chave:valor a partir das caixas do OCR de cada página"""
+def parse_key_values(pages, vocab=_VOCAB_ROTULOS):
+    """Monta o dicionário chave:valor a partir das caixas do OCR de cada página.
+    vocab: rótulos reconhecidos mesmo sem ':' (padrão: ROTULOS)"""
     data = {}
 
     def add(chave, valor):
@@ -288,7 +295,7 @@ def parse_key_values(pages):
 
     for items in pages:
         # descarta caixas sem letra nem número (ex.: "*…", "-")
-        items = dividir_caixas([(t, b) for t, b in items if re.search(r"\w", t)])
+        items = dividir_caixas([(t, b) for t, b in items if re.search(r"\w", t)], vocab)
         diretos = {}  # índice -> (chave, valor) de linhas "chave: valor"
         rotulos = {}  # índice -> chave de rótulos que esperam valor em outra caixa
         com_dois_pontos = set()  # rótulos escritos "Rótulo:"
@@ -303,7 +310,7 @@ def parse_key_values(pages):
                     rotulos[i] = chave
                     com_dois_pontos.add(i)
                 continue
-            rotulo = identificar_rotulo(texto)
+            rotulo = casar(texto, vocab)
             if rotulo:
                 rotulos[i] = para_chave(rotulo)
 
