@@ -132,7 +132,8 @@ def casar(texto, vocab):
         return compactos[compacto]
     if len(compacto) < 4:
         return None
-    match = difflib.get_close_matches(compacto, aproximaveis, n=1, cutoff=0.8)
+    # 0.85: aceita "NATUIRALIDADE", mas não "DO CURSO" como "CURSO"
+    match = difflib.get_close_matches(compacto, aproximaveis, n=1, cutoff=0.85)
     return compactos[match[0]] if match else None
 
 _VOCAB_ROTULOS = vocabulario(ROTULOS)
@@ -216,7 +217,47 @@ def juntar_tabelas(tabelas):
             juntas.append(t)
     return juntas
 
-def distancia_valor(rotulo, candidato):
+def dividir_rotulos_grudados(texto):
+    """Posições onde começam rótulos grudados no meio de uma caixa do OCR.
+    Ex.: "20020352 Nome:" -> [9]; "Local: Água Grande - São Nacionalidade:" -> [25]"""
+    cortes = []
+    for m in SEPARADOR.finditer(texto):
+        inicio_trecho = cortes[-1] if cortes else 0
+        palavras = [p for p in re.finditer(r"\S+", texto[:m.start()]) if p.start() >= inicio_trecho]
+        inicio = None
+        # 1º: rótulo conhecido exato, do mais longo ao mais curto ("Data de nascimento" antes de "nascimento")
+        for n in range(min(4, len(palavras)), 0, -1):
+            candidato = texto[palavras[-n].start():m.start()]
+            if normalizar(candidato).replace(" ", "") in _VOCAB_ROTULOS[0]:
+                inicio = palavras[-n].start()
+                break
+        # 2º: rótulo aproximado, do mais curto ao mais longo ("Nacionalidade" antes de "São Nacionalidade")
+        if inicio is None:
+            for n in range(1, min(4, len(palavras)) + 1):
+                if identificar_rotulo(texto[palavras[-n].start():m.start()]):
+                    inicio = palavras[-n].start()
+                    break
+        # 3º: rótulo desconhecido, mas o que vem antes tem número, então é valor ("20020352 Fax:")
+        if inicio is None and palavras and re.search(r"\d", texto[inicio_trecho:palavras[-1].start()]):
+            inicio = palavras[-1].start()
+        # só corta se sobrar texto antes do rótulo
+        if inicio and texto[inicio_trecho:inicio].strip():
+            cortes.append(inicio)
+    return cortes
+
+def dividir_caixas(items):
+    """Separa caixas com rótulos grudados, estimando a posição de cada pedaço pelo nº de caracteres"""
+    resultado = []
+    for texto, (x1, y1, x2, y2) in items:
+        limites = [0] + dividir_rotulos_grudados(texto) + [len(texto)]
+        largura_char = (x2 - x1) / max(len(texto), 1)
+        for a, b in zip(limites, limites[1:]):
+            pedaco = texto[a:b].strip()
+            if pedaco:
+                resultado.append((pedaco, [x1 + a * largura_char, y1, x1 + b * largura_char, y2]))
+    return resultado
+
+def distancia_valor(rotulo, candidato, prefere_direita=False):
     """Distância do rótulo até uma caixa logo abaixo ou logo à direita dele; None se não for vizinha"""
     rx1, ry1, rx2, ry2 = rotulo
     cx1, cy1, cx2, cy2 = candidato
@@ -225,7 +266,10 @@ def distancia_valor(rotulo, candidato):
     # abaixo: começa depois do rótulo e se sobrepõe a ele na horizontal
     if cy1 >= ry2 - folga and min(rx2, cx2) > max(rx1, cx1):
         d = cy1 - ry2
-        return max(d, 0) if d <= altura * 3 else None
+        if d > altura * 3:
+            return None
+        # em "Rótulo:" o valor costuma vir à direita; abaixo só se não houver nada perto à direita
+        return max(d, 0) + (altura * 15 if prefere_direita else 0)
     # à direita: na mesma altura do rótulo
     if ry1 <= (cy1 + cy2) / 2 <= ry2 and cx1 >= rx2 - folga:
         d = cx1 - rx2
@@ -247,9 +291,10 @@ def parse_key_values(pages):
 
     for items in pages:
         # descarta caixas sem letra nem número (ex.: "*…", "-")
-        items = [(t, b) for t, b in items if re.search(r"\w", t)]
+        items = dividir_caixas([(t, b) for t, b in items if re.search(r"\w", t)])
         diretos = {}  # índice -> (chave, valor) de linhas "chave: valor"
         rotulos = {}  # índice -> chave de rótulos que esperam valor em outra caixa
+        com_dois_pontos = set()  # rótulos escritos "Rótulo:"
         for i, (texto, _) in enumerate(items):
             m = SEPARADOR.search(texto)
             chave = texto[:m.start()].strip().lower() if m else ""
@@ -259,6 +304,7 @@ def parse_key_values(pages):
                     diretos[i] = (chave, valor)
                 else:
                     rotulos[i] = chave
+                    com_dois_pontos.add(i)
                 continue
             rotulo = identificar_rotulo(texto)
             if rotulo:
@@ -270,7 +316,7 @@ def parse_key_values(pages):
             for j, (_, box) in enumerate(items):
                 if j in rotulos or j in diretos:
                     continue
-                d = distancia_valor(items[i][1], box)
+                d = distancia_valor(items[i][1], box, prefere_direita=i in com_dois_pontos)
                 if d is not None:
                     pares.append((d, i, j))
         valor_de = {}
