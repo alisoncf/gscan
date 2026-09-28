@@ -108,6 +108,10 @@ ROTULOS = [
     "MATRICULA", "CURSO",
 ]
 
+# Rótulos que podem ter vários valores empilhados (ex.: FILIACAO: pai embaixo, mãe logo abaixo).
+# Os valores extras saem como <chave>_2, <chave>_3...
+ROTULOS_MULTIPLOS = ["FILIACAO"]
+
 # Títulos de coluna de tabelas (ex.: notas de histórico escolar). Sem acento, em maiúsculas.
 # Uma linha com 3 ou mais destes títulos é tratada como cabeçalho de tabela.
 COLUNAS_TABELA = [
@@ -279,6 +283,20 @@ def distancia_valor(rotulo, candidato, prefere_direita=False):
         return max(d, 0) if d <= altura * 15 else None
     return None
 
+_MULTIPLOS = {r.replace(" ", "") for r in ROTULOS_MULTIPLOS}
+
+def proximo_empilhado(items, box, ocupados):
+    """Índice da caixa livre logo abaixo de box e alinhada à esquerda com ela; None se não houver"""
+    x1, _, _, y2 = box
+    altura = max(box[3] - box[1], 1)
+    candidatos = [
+        j for j, (_, (cx1, cy1, _, _)) in enumerate(items)
+        if j not in ocupados
+        and y2 - altura * 0.5 <= cy1 <= y2 + altura  # na linha seguinte, sem espaço grande
+        and abs(cx1 - x1) <= altura * 2              # começa alinhada com o valor de cima
+    ]
+    return min(candidatos, key=lambda j: items[j][1][1], default=None)
+
 def parse_key_values(pages, vocab=_VOCAB_ROTULOS):
     """Monta o dicionário chave:valor a partir das caixas do OCR de cada página.
     vocab: rótulos reconhecidos mesmo sem ':' (padrão: ROTULOS)"""
@@ -330,11 +348,28 @@ def parse_key_values(pages, vocab=_VOCAB_ROTULOS):
                 valor_de[i] = j
                 usados.add(j)
 
+        # valores extras empilhados logo abaixo do primeiro valor (só em ROTULOS_MULTIPLOS)
+        extras = {}
+        for i, j in valor_de.items():
+            if normalizar(rotulos[i]).replace(" ", "") not in _MULTIPLOS:
+                continue
+            extras[i] = []
+            atual = items[j][1]
+            while True:
+                j = proximo_empilhado(items, atual, ocupados=usados | set(rotulos) | set(diretos))
+                if j is None:
+                    break
+                extras[i].append(items[j][0])
+                usados.add(j)
+                atual = items[j][1]
+
         for i, (texto, _) in enumerate(items):
             if i in diretos:
                 add(*diretos[i])
             elif i in rotulos:
                 add(rotulos[i], items[valor_de[i]][0] if i in valor_de else "")
+                for extra in extras.get(i, []):
+                    add(rotulos[i], extra)
             elif i not in usados:
                 add(f"campo_{len(data)+1}", texto)
     return data
