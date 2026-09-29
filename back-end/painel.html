@@ -19,7 +19,7 @@
 <body>
 
 <h1>GScan - Painel de Testes</h1>
-<p class="hint">Ferramenta local para chamar os endpoints diretamente, sem precisar do front-end. Suba o servidor com <code>uvicorn main:app --port 8000</code> (veja o README).</p>
+<p class="hint">Ferramenta local para chamar os endpoints diretamente, sem precisar do front-end. Abra pelo servidor, em <code>http://127.0.0.1:8000/painel</code> (veja o README).</p>
 
 <label for="servidor">Servidor</label>
 <input type="text" id="servidor" value="http://127.0.0.1:8000">
@@ -60,6 +60,11 @@ const ENDPOINTS = {
     campos: [{ nome: "paginas", rotulo: "Páginas (opcional, ex.: 1,3,5-7)", placeholder: "vazio = todas" }]
   }
 };
+
+// aberto pelo servidor (http://.../painel): usa o próprio endereço como servidor
+if (location.protocol.startsWith("http")) {
+  document.getElementById("servidor").value = location.origin;
+}
 
 const selectEndpoint = document.getElementById("endpoint");
 const camposExtraDiv = document.getElementById("campos-extra");

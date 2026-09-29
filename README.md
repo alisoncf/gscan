@@ -67,7 +67,9 @@ Cada arquivo também pode subir sozinho, se precisar de só um endpoint (ex.: `u
 
 ## Painel de testes
 
-Com o servidor no ar, abra [back-end/painel.html](back-end/painel.html) direto no navegador (duplo clique no arquivo) para testar qualquer endpoint sem precisar do front-end nem de curl: confira o endereço do servidor, escolha o endpoint, selecione o arquivo, preencha os campos opcionais e envie. É só um HTML estático com JavaScript puro, sem servidor próprio; a API tem CORS habilitado para o navegador aceitar as chamadas.
+Com o servidor no ar (Docker ou `uvicorn main:app`), abra **`http://127.0.0.1:8000/painel`** no navegador para testar qualquer endpoint sem precisar do front-end nem de curl: escolha o endpoint, selecione o arquivo, preencha os campos opcionais e envie. O endereço raiz (`http://127.0.0.1:8000/`) também leva ao painel.
+
+O painel é o arquivo [back-end/painel.html](back-end/painel.html). Dá para abri-lo direto (duplo clique), mas não é recomendado: navegadores recentes pedem permissão para uma página aberta como arquivo acessar `127.0.0.1`, e se o aviso for bloqueado ou fechado a chamada falha com "Failed to fetch" sem chegar ao servidor. Aberto pelo servidor, isso não acontece.
 
 ## Endpoints
 
