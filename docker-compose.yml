@@ -1,12 +1,17 @@
 services:
   gscan:
-    build: ./back-end
+    build: ./container_dev
     
     platform: linux/amd64
     ports:
       - "8000:8000"
     volumes:
+      - ./back-end:/app
       - paddle-modelos:/root/.paddlex
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped
 
 volumes:

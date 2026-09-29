@@ -13,10 +13,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt constraints.txt ./
+COPY back-end/requirements.txt back-end/constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY *.py painel.html ./
+COPY back-end/*.py back-end/painel.html ./
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
