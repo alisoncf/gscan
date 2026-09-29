@@ -28,6 +28,26 @@ A API fica em `http://127.0.0.1:8000` (Swagger em `/docs`), e o [painel de teste
 - Depois de mudar o código, rode `docker compose up -d --build` de novo.
 - Para usar outra porta (ex.: se a 8000 já estiver ocupada), mude só o número da esquerda em `ports` no [docker-compose.yml](docker-compose.yml): `"8080:8000"` deixa a API em `http://127.0.0.1:8080`. No painel, ajuste o campo **Servidor** para o mesmo endereço.
 
+## Build de produção (imagem final)
+
+O compose do projeto está voltado para desenvolvimento (bind mount de [back-end](back-end)). Para gerar a imagem final de produção, use o target `prod` do [container/Dockerfile](container/Dockerfile).
+
+### Com Podman
+
+```bash
+podman build -f container/Dockerfile --target prod -t localhost/gscan:prod .
+podman run --rm -p 8000:8000 -v paddle-modelos:/root/.paddlex localhost/gscan:prod
+```
+
+### Com Docker
+
+```bash
+docker build -f container/Dockerfile --target prod -t gscan:prod .
+docker run --rm -p 8000:8000 -v paddle-modelos:/root/.paddlex gscan:prod
+```
+
+A API sobe em `http://127.0.0.1:8000` e a documentação em `http://127.0.0.1:8000/docs`.
+
 As seções abaixo (Requisitos, Instalação, Como rodar) são para rodar sem Docker.
 
 ## Requisitos

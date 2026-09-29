@@ -1,6 +1,9 @@
 services:
   gscan:
-    build: ./container_dev
+    build:
+      context: .
+      dockerfile: container/Dockerfile
+      target: dev
     
     platform: linux/amd64
     ports:
