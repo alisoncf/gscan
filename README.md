@@ -126,7 +126,10 @@ Campos não encontrados vêm como `null`.
 Recebe um PDF ou imagem, faz OCR (páginas de PDF são processadas em paralelo) e estrutura o documento automaticamente, sem precisar informar os campos antecipadamente. Usa a posição de cada texto na página para:
 
 - **Pares chave:valor**: linhas `chave: valor`, e também rótulos sem `:` (como no RG: `NOME` com o valor logo abaixo). Cada rótulo é ligado ao texto mais próximo abaixo ou à direita dele; rótulos escritos com `:` preferem o valor à direita e só usam o de baixo quando não há nada ao lado. Rótulos sem `:` precisam estar na lista `ROTULOS` de [appall.py](back-end/appall.py); a comparação tolera erros de OCR e acentos.
-- **Tabelas**: uma linha com 3 ou mais títulos da lista `COLUNAS_TABELA` (ex.: `DISCIPLINA`, `ANO`, `MF`, `SF`) vira cabeçalho, e as linhas abaixo dela são lidas coluna por coluna até aparecer uma linha com texto numa coluna só ou um espaço vertical grande. Tabelas com as mesmas colunas em páginas seguidas são unidas.
+- **Tabelas**: uma linha com 3 ou mais títulos da lista `COLUNAS_TABELA` (ex.: `DISCIPLINA`, `ANO`, `MF`, `SF`) vira cabeçalho. Títulos de grupo por cima de outros (ex.: `CH` acima de Teórica/Prática/EAD) são ignorados. As colunas são separadas pelos espaços em branco verticais do corpo da tabela.
+  - Cada linha da tabela é uma linha com texto em mais da metade das colunas. Textos de uma coluna só entre elas (ex.: nome da disciplina quebrado em duas linhas, "Docentes: ...") entram na linha mais próxima.
+  - A tabela acaba num espaço vertical grande ou num salto bem maior que o espaçamento normal entre as linhas (ex.: o rodapé). Textos soltos logo depois da última linha (ex.: "Continua...") só entram se a tabela tiver células de várias linhas.
+  - Tabelas com as mesmas colunas em páginas seguidas são unidas. Em colunas numéricas, um `o` sozinho (erro comum do OCR) vira `0`; células só com símbolos (`--`, `.`, `*`) ficam vazias.
 
 Textos que não se encaixam em nenhum dos dois viram `campo_N`. Chaves repetidas ganham sufixo (`nome_2`).
 
@@ -160,7 +163,7 @@ curl -X POST "http://127.0.0.1:8000/extract" \
 }
 ```
 
-> **Limitações conhecidas:** o resultado depende de como o OCR separa as caixas de texto. Documentos tortos podem misturar linhas; células com texto quebrado em duas linhas encerram a tabela; colunas com títulos fora de `COLUNAS_TABELA` não são reconhecidas (acrescente-os à lista).
+> **Limitações conhecidas:** o resultado depende de como o OCR separa as caixas de texto. Documentos tortos podem misturar linhas; colunas com títulos fora de `COLUNAS_TABELA` não são reconhecidas (acrescente-os à lista).
 
 ### `POST /split` — appsplit.py
 

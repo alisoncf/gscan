@@ -174,7 +174,8 @@ def agrupar_linhas(items):
 
 def extrair_tabelas(items):
     """Encontra tabelas pelo cabeçalho e devolve (tabelas, caixas que não fazem parte delas)"""
-    items = [(t, b) for t, b in items if re.search(r"\w", t)]
+    # mantém caixas só com símbolos: em tabela, "--" é valor (ex.: nota ainda não lançada)
+    items = [(t, b) for t, b in items if t.strip()]
     linhas = agrupar_linhas(items)
     usados = set()
     tabelas = []
@@ -184,37 +185,136 @@ def extrair_tabelas(items):
         cabecalho = [(i, casar(items[i][0], _VOCAB_COLUNAS)) for i in linhas[k]]
         cabecalho = sorted([(i, c) for i, c in cabecalho if c], key=lambda p: items[p[0]][1][0])
         k += 1
+        # título de grupo (ex.: "CH" por cima de Teórica/Prática/EAD) não é coluna:
+        # descarta o título que fica acima de outro, na mesma faixa horizontal
+        def e_grupo(i):
+            x1, _, x2, y2 = items[i][1]
+            for j, _ in cabecalho:
+                jx1, jy1, jx2, jy2 = items[j][1]
+                sobrepoe = min(x2, jx2) > max(x1, jx1)
+                if j != i and sobrepoe and (items[i][1][1] + y2) / 2 < (jy1 + jy2) / 2 - (jy2 - jy1) * 0.3:
+                    return True
+            return False
+        cabecalho = [(i, c) for i, c in cabecalho if not e_grupo(i)]
         if len(cabecalho) < 3:
             continue
         usados.update(i for i, _ in cabecalho)
         nomes = [para_chave(c) for _, c in cabecalho]
         caixas = [items[i][1] for i, _ in cabecalho]
-        # fronteira entre colunas: meio do espaço entre um título e o seguinte
+        # fronteira provisória entre colunas: meio do espaço entre um título e o seguinte
+        # (depois é refinada pelos espaços em branco do corpo da tabela)
         fronteiras = [(a[2] + b[0]) / 2 for a, b in zip(caixas, caixas[1:])]
         altura = sum(b[3] - b[1] for b in caixas) / len(caixas)
         fundo = max(b[3] for b in caixas)
 
+        def ler_linha(linha):
+            """Célula de cada caixa da linha: {coluna: [(y, x, texto)]}, e o centro vertical da linha"""
+            celulas = {}
+            for i in linha:
+                x1, y1, x2, _ = items[i][1]
+                coluna = nomes[bisect.bisect(fronteiras, (x1 + x2) / 2)]
+                celulas.setdefault(coluna, []).append((y1, x1, items[i][0]))
+            centro = sum((items[i][1][1] + items[i][1][3]) / 2 for i in linha) / len(linha)
+            return {"celulas": celulas, "centro": centro, "indices": list(linha)}
+
+        def juntar(destino, pedaco):
+            for coluna, textos in pedaco["celulas"].items():
+                destino["celulas"].setdefault(coluna, []).extend(textos)
+            destino["indices"].extend(pedaco["indices"])
+
+        # Linha principal: texto em mais da metade das colunas. As outras linhas são pedaços
+        # de célula quebrada em várias linhas (ex.: nome da disciplina em cima, docentes
+        # embaixo) e vão para a linha principal mais próxima.
+        minimo_colunas = max(2, len(nomes) // 2 + 1)
         registros = []
+        pendentes = []  # linhas que não são principais, ainda sem destino: (k, linha lida)
+        varias_alturas = False  # a tabela tem células quebradas em várias linhas?
         while k < len(linhas):
-            linha = sorted(linhas[k], key=lambda i: items[i][1][0])
+            linha = linhas[k]
             topo = min(items[i][1][1] for i in linha)
             if topo - fundo > altura * 3:
                 break  # espaço grande: a tabela acabou
-            celulas = {}
-            for i in linha:
-                x1, _, x2, _ = items[i][1]
-                coluna = nomes[bisect.bisect(fronteiras, (x1 + x2) / 2)]
-                celulas.setdefault(coluna, []).append(items[i][0])
-            if len(celulas) < 2:
-                break  # texto numa coluna só (ex.: "Continua..."): a tabela acabou
-            registros.append({n: " ".join(celulas.get(n, [])) for n in nomes})
-            usados.update(linha)
+            lida = ler_linha(linha)
+            if len(lida["celulas"]) >= minimo_colunas:
+                # linhas principais vêm num espaçamento regular; um salto bem maior que o
+                # normal é outro bloco do documento (ex.: rodapé com várias colunas)
+                if len(registros) >= 2:
+                    passos = sorted(b["centro"] - a["centro"] for a, b in zip(registros, registros[1:]))
+                    if lida["centro"] - registros[-1]["centro"] > passos[len(passos) // 2] * 2.5:
+                        break
+                anterior = registros[-1] if registros else None
+                for _, p in pendentes:
+                    perto_desta = anterior is None or abs(p["centro"] - lida["centro"]) <= abs(p["centro"] - anterior["centro"])
+                    juntar(lida if perto_desta else anterior, p)
+                    varias_alturas = True
+                pendentes = []
+                registros.append(lida)
+            else:
+                pendentes.append((k, lida))
             fundo = max(items[i][1][3] for i in linha)
             k += 1
-        tabelas.append({"colunas": nomes, "linhas": registros})
+
+        # linhas soltas depois da última linha principal: só entram em tabelas com células
+        # de várias linhas e se estiverem logo abaixo; senão (ex.: "Continua...") ficam de fora
+        for k_pendente, p in pendentes:
+            if varias_alturas and registros and abs(p["centro"] - registros[-1]["centro"]) <= altura * 1.5:
+                juntar(registros[-1], p)
+            else:
+                k = k_pendente  # a tabela acaba aqui; o resto volta a ser analisado
+                break
+
+        corpo = [i for r in registros for i in r["indices"]]
+        fronteiras = refinar_fronteiras(fronteiras, caixas, [items[i][1] for i in corpo])
+        linhas_tabela = []
+        for r in registros:
+            usados.update(r["indices"])
+            celulas = {}
+            for i in r["indices"]:
+                x1, y1, x2, _ = items[i][1]
+                coluna = nomes[bisect.bisect(fronteiras, (x1 + x2) / 2)]
+                celulas.setdefault(coluna, []).append((y1, x1, items[i][0]))
+            linha_tabela = {n: " ".join(t for _, _, t in sorted(celulas.get(n, []))) for n in nomes}
+            # célula só com símbolos ("--" e as variações que o OCR lê: ".", ":", "*") = sem valor
+            linhas_tabela.append({n: v if re.search(r"\w", v) else "" for n, v in linha_tabela.items()})
+        corrigir_zeros(linhas_tabela, nomes)
+        tabelas.append({"colunas": nomes, "linhas": linhas_tabela})
 
     restantes = [item for i, item in enumerate(items) if i not in usados]
     return tabelas, restantes
+
+def refinar_fronteiras(fronteiras, titulos, caixas_corpo):
+    """Move cada fronteira entre colunas para o maior espaço em branco vertical do corpo
+    da tabela entre os dois títulos. Resolve títulos centralizados em colunas largas
+    (ex.: "Disciplina" no meio, nomes alinhados à esquerda, logo depois do código)."""
+    ocupado = []  # trechos do eixo x cobertos por alguma caixa do corpo
+    for x1, _, x2, _ in sorted(caixas_corpo):
+        if ocupado and x1 <= ocupado[-1][1]:
+            ocupado[-1][1] = max(ocupado[-1][1], x2)
+        else:
+            ocupado.append([x1, x2])
+    espacos = [(a[1], b[0]) for a, b in zip(ocupado, ocupado[1:])]
+    novas = []
+    for fronteira, a, b in zip(fronteiras, titulos, titulos[1:]):
+        centro_a, centro_b = (a[0] + a[2]) / 2, (b[0] + b[2]) / 2
+        # parte de cada espaço em branco que fica entre os centros dos dois títulos
+        candidatos = [(min(fim, centro_b) - max(ini, centro_a), ini, fim) for ini, fim in espacos]
+        candidatos = [c for c in candidatos if c[0] > 0]
+        if candidatos:
+            _, ini, fim = max(candidatos)
+            fronteira = min(max((ini + fim) / 2, centro_a), centro_b)
+        novas.append(fronteira)
+    return novas
+
+def corrigir_zeros(linhas_tabela, nomes):
+    """Em colunas numéricas, 'o' sozinho é o OCR lendo o número 0"""
+    for n in nomes:
+        valores = [l[n] for l in linhas_tabela if l[n]]
+        # "o" conta como número: há colunas em que o OCR leu todos os zeros como "o"
+        numericos = [v for v in valores if re.fullmatch(r"[\d.,%]+|[oO]", v)]
+        if valores and len(numericos) * 2 > len(valores):
+            for l in linhas_tabela:
+                if l[n] in ("o", "O"):
+                    l[n] = "0"
 
 def juntar_tabelas(tabelas):
     """Junta tabelas seguidas com as mesmas colunas (tabela que continua na página seguinte)"""
@@ -249,8 +349,11 @@ def dividir_rotulos_grudados(texto, vocab=_VOCAB_ROTULOS):
         # 3º: rótulo desconhecido, mas o que vem antes tem número, então é valor ("20020352 Fax:")
         if inicio is None and palavras and re.search(r"\d", texto[inicio_trecho:palavras[-1].start()]):
             inicio = palavras[-1].start()
-        # só corta se sobrar texto antes do rótulo
-        if inicio and texto[inicio_trecho:inicio].strip():
+        # só corta se o que vem antes do rótulo for um valor: tem número ("20020352 Nome:")
+        # ou vem depois de outro ':' ("Local: Água Grande - São Nacionalidade:");
+        # "Resolução do Curso:" é um rótulo só e não é cortado
+        antes = texto[inicio_trecho:inicio] if inicio else ""
+        if antes.strip() and (re.search(r"\d", antes) or SEPARADOR.search(antes)):
             cortes.append(inicio)
     return cortes
 
