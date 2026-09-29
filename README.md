@@ -26,6 +26,7 @@ A API fica em `http://127.0.0.1:8000` (Swagger em `/docs`), e o [painel de teste
 - A primeira chamada a `/extract` ou `/extract_fields` baixa os modelos do PaddleOCR (cerca de 1 minuto). Eles ficam guardados no volume `paddle-modelos` e não são baixados de novo.
 - Para parar: `docker compose down`. Para ver os logs: `docker compose logs -f`.
 - Depois de mudar o código, rode `docker compose up -d --build` de novo.
+- Para usar outra porta (ex.: se a 8000 já estiver ocupada), mude só o número da esquerda em `ports` no [docker-compose.yml](docker-compose.yml): `"8080:8000"` deixa a API em `http://127.0.0.1:8080`. No painel, ajuste o campo **Servidor** para o mesmo endereço.
 
 As seções abaixo (Requisitos, Instalação, Como rodar) são para rodar sem Docker.
 
@@ -132,7 +133,8 @@ Textos que não se encaixam em nenhum dos dois viram `campo_N`. Chaves repetidas
 
 **Exemplo:**
 ```bash
-curl -X POST "http://127.0.0.1:8000/extract"   -F "file=@historico.pdf"
+curl -X POST "http://127.0.0.1:8000/extract" \
+  -F "file=@historico.pdf"
 ```
 
 **Resposta:**
