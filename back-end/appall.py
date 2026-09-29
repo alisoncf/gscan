@@ -96,7 +96,8 @@ app.include_router(router)
 # ':' que separa chave e valor; ignora ':' entre dígitos (ex.: horário 14:30)
 SEPARADOR = re.compile(r"(?<!\d):|:(?!\d)")
 
-# Rótulos comuns em documentos sem ':' (ex.: RG, CNH). Sem acento, em maiúsculas.
+# Rótulos comuns em documentos sem ':' (ex.: RG, CNH).
+# Pode escrever como aparece no documento: acentos, maiúsculas e pontuação são ignorados.
 ROTULOS = [
     "NOME", "NOME SOCIAL", "CPF", "RG", "REGISTRO GERAL", "DOC IDENTIDADE",
     "ORGAO EMISSOR", "UF", "DATA DE EXPEDICAO", "DATA NASCIMENTO",
@@ -112,13 +113,13 @@ ROTULOS = [
 # Os valores extras saem como <chave>_2, <chave>_3...
 ROTULOS_MULTIPLOS = ["FILIACAO"]
 
-# Títulos de coluna de tabelas (ex.: notas de histórico escolar). Sem acento, em maiúsculas.
+# Títulos de coluna de tabelas (ex.: notas de histórico escolar). Acentos e maiúsculas são ignorados.
 # Uma linha com 3 ou mais destes títulos é tratada como cabeçalho de tabela.
 COLUNAS_TABELA = [
     "DISCIPLINA", "COMPONENTE CURRICULAR", "CODIGO", "TURMA", "PROFESSOR",
     "ANO", "SEMESTRE", "PERIODO", "MF", "MEDIA", "MEDIA FINAL", "NOTA",
     "FREQUENCIA", "FREQ", "FALTAS", "CH", "CHE", "CHC", "CARGA HORARIA",
-    "CREDITOS", "SF", "SITUACAO", "RESULTADO",
+    "CREDITOS", "SF", "SITUACAO", "RESULTADO", "TEORICA", "PRATICA", "EAD",
 ]
 
 def normalizar(texto):
@@ -129,7 +130,8 @@ def normalizar(texto):
 
 def vocabulario(termos):
     """Prepara uma lista de termos para busca com casar()"""
-    compactos = {t.replace(" ", ""): t for t in termos}
+    # normaliza os termos também, para "Carga Horária" e "CARGA HORARIA" serem o mesmo termo
+    compactos = {normalizar(t).replace(" ", ""): normalizar(t) for t in termos}
     # termos curtos (RG, UF, MF...) só valem com acerto exato, para não pegar lixo do OCR
     aproximaveis = [c for c in compactos if len(c) >= 4]
     return compactos, aproximaveis
@@ -283,7 +285,7 @@ def distancia_valor(rotulo, candidato, prefere_direita=False):
         return max(d, 0) if d <= altura * 15 else None
     return None
 
-_MULTIPLOS = {r.replace(" ", "") for r in ROTULOS_MULTIPLOS}
+_MULTIPLOS = {normalizar(r).replace(" ", "") for r in ROTULOS_MULTIPLOS}
 
 def proximo_empilhado(items, box, ocupados):
     """Índice da caixa livre logo abaixo de box e alinhada à esquerda com ela; None se não houver"""
