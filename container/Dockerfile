@@ -1,10 +1,9 @@
-FROM python:3.13-slim
+FROM python:3.13-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# tesseract + idioma português (/transcribe), poppler (PDF -> imagem),
-# libgl/libglib (OpenCV) e libgomp (PaddlePaddle)
+# Dependencias de OCR e libs nativas usadas no processamento
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         tesseract-ocr tesseract-ocr-por poppler-utils \
@@ -13,10 +12,17 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY requirements.txt constraints.txt ./
+COPY back-end/requirements.txt back-end/constraints.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY *.py painel.html ./
+FROM base AS dev
+
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+FROM base AS prod
+
+COPY back-end/*.py back-end/painel.html ./
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
